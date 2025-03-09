@@ -4,3 +4,4 @@ opencv-python-headless
 yt-dlp
 numpy
 torch
+ffmpeg-python
