@@ -1,21 +1,15 @@
 import os
-import asyncio
 import streamlit as st
 import cv2
 import numpy as np
 import time
 import yt_dlp
+import imageio
 from ultralytics import YOLO
 
 # Suppress unnecessary PyTorch debugging messages
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["PYTHONWARNINGS"] = "ignore"
-
-# Fix asyncio event loop conflict
-try:
-    asyncio.get_running_loop()
-except RuntimeError:
-    asyncio.set_event_loop(asyncio.new_event_loop())
 
 st.title("YOLO Object Detection on YouTube Videos")
 
@@ -41,20 +35,12 @@ def get_youtube_video_url(youtube_url):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             video_info = ydl.extract_info(youtube_url, download=False)
-
-            # Check if a valid URL exists
-            if "url" in video_info:
-                return video_info["url"]
-            elif "formats" in video_info:
-                return video_info["formats"][-1]["url"]  # Get the last available format
-            else:
-                st.error("Failed to extract video stream URL. Video may be restricted or unavailable.")
-                return None
+            return video_info.get("url", None)
     except Exception as e:
         st.error(f"Error fetching video: {e}")
         return None
 
-if youtube_url:  # Only load YOLO when a URL is provided
+if youtube_url:
     video_id = extract_youtube_video_id(youtube_url)
 
     if video_id:
@@ -65,39 +51,41 @@ if youtube_url:  # Only load YOLO when a URL is provided
 
         st.success("Video embedded successfully! 🎥 Now processing frames...")
 
-        # Load YOLO Model only after URL is entered
+        # Load YOLO Model
         model = YOLO("yolov8n.pt")
 
         # Get direct video URL
         video_url = get_youtube_video_url(youtube_url)
 
         if video_url:
-            cap = cv2.VideoCapture(video_url)
-            frame_window = st.empty()  # Placeholder for displaying frames
+            try:
+                video_reader = imageio.get_reader(video_url, format='ffmpeg')
+                frame_window = st.empty()  # Placeholder for displaying frames
+                
+                for frame in video_reader:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)  # Convert to OpenCV format
+                    
+                    # Run YOLO on the frame
+                    results = model(frame)[0]
 
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
+                    # Draw bounding boxes
+                    for box in results.boxes:
+                        x1, y1, x2, y2 = map(int, box.xyxy[0])
+                        conf = box.conf[0].item()
+                        cls = int(box.cls[0].item())
+                        label = results.names[cls]
 
-                results = model(frame)[0]
+                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                        cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                for box in results.boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    conf = box.conf[0].item()
-                    cls = int(box.cls[0].item())
-                    label = results.names[cls]
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    frame_window.image(frame_rgb, channels="RGB")
 
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    cv2.putText(frame, f"{label} {conf:.2f}", (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    time.sleep(1)  # Process every second to reduce load
 
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_window.image(frame_rgb, channels="RGB")
-
-                time.sleep(1)  # Process every 1 second to reduce load
-
-            cap.release()
+            except Exception as e:
+                st.error(f"Error processing video: {e}")
         else:
             st.error("Could not retrieve the video stream. Try a different YouTube video.")
     else:
