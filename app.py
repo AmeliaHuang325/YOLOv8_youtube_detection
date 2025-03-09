@@ -72,7 +72,7 @@ if youtube_url:  # Only load YOLO when a URL is provided
         video_url = get_youtube_video_url(youtube_url)
 
         if video_url:
-            cap = cv2.VideoCapture(video_url)
+            cap = cv2.VideoCapture(video_url, cv2.CAP_FFMPEG)
             frame_window = st.empty()  # Placeholder for displaying frames
 
             while cap.isOpened():
