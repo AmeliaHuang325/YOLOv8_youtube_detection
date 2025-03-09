@@ -1,5 +1,6 @@
 streamlit
-opencv-python-headless
-numpy
 ultralytics
+opencv-python-headless
 yt-dlp
+numpy
+torch
