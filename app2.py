@@ -23,7 +23,8 @@ st.title("YOLO Object Detection on YouTube Videos")
 # Input for YouTube video
 youtube_url = st.text_input("Enter YouTube video URL:")
 
-def extract_youtube_video_id(url):
+
+def extract_youtube_video_id(url: str):
     """Extract the video ID from a YouTube URL."""
     if "youtube.com" in url:
         return url.split("v=")[-1].split("&")[0]
@@ -31,27 +32,43 @@ def extract_youtube_video_id(url):
         return url.split("/")[-1]
     return None
 
-def get_youtube_video_url(youtube_url):
-    """Extracts the best available video stream URL using yt-dlp."""
-    ydl_opts = {
+
+def get_youtube_video_url(youtube_url: str):
+    """
+    Extracts a direct video stream URL using yt-dlp.
+    Tries to get an MP4-based format for simpler FFmpeg parsing.
+    """
+    # Primary approach: bestvideo[ext=mp4] + bestaudio
+    ydl_opts_main = {
         "quiet": True,
         "noplaylist": True,
         "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best",
     }
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            video_info = ydl.extract_info(youtube_url, download=False)
-            if "url" in video_info:
-                return video_info["url"]
-            elif "formats" in video_info:
-                return video_info["formats"][-1]["url"]
-            else:
-                st.error("Failed to extract video stream URL. Video may be restricted or unavailable.")
-                return None
-    except Exception as e:
-        st.error(f"Error fetching video: {e}")
-        return None
+
+    # Fallback: just grab any mp4 format if the above fails
+    ydl_opts_fallback = {
+        "quiet": True,
+        "noplaylist": True,
+        "format": "mp4",
+    }
+
+    # Try main approach first
+    for ydl_opts in (ydl_opts_main, ydl_opts_fallback):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                video_info = ydl.extract_info(youtube_url, download=False)
+                if "url" in video_info:
+                    return video_info["url"]
+                elif "formats" in video_info:
+                    # Last available format
+                    return video_info["formats"][-1]["url"]
+                else:
+                    st.error("Failed to extract a valid video stream URL.")
+        except Exception as e:
+            st.warning(f"Attempt with format={ydl_opts['format']} failed: {e}")
+
+    return None
+
 
 if youtube_url:  # Only load YOLO when a URL is provided
     video_id = extract_youtube_video_id(youtube_url)
@@ -71,7 +88,7 @@ if youtube_url:  # Only load YOLO when a URL is provided
         video_url = get_youtube_video_url(youtube_url)
 
         if video_url:
-            # ---------- NEW FFmpeg-based frame reading ----------
+            # ---------- FFmpeg-based frame reading with better error handling ----------
             try:
                 # Probe the stream to get width/height
                 probe = ffmpeg.probe(video_url)
@@ -86,6 +103,7 @@ if youtube_url:  # Only load YOLO when a URL is provided
                     height = int(video_stream["height"])
 
                     # Create an FFmpeg process to pipe raw video frames
+                    # NOTE: Some DRM or adaptive streams may still fail here.
                     process = (
                         ffmpeg
                         .input(video_url)
@@ -98,9 +116,10 @@ if youtube_url:  # Only load YOLO when a URL is provided
                     while True:
                         in_bytes = process.stdout.read(width * height * 3)
                         if not in_bytes:
+                            # End of stream or no data
                             break
 
-                        # Create a writable NumPy array from raw bytes
+                        # Make a writable NumPy array from raw bytes
                         frame = np.frombuffer(in_bytes, np.uint8).copy().reshape((height, width, 3))
 
                         # YOLO inference
@@ -120,13 +139,19 @@ if youtube_url:  # Only load YOLO when a URL is provided
                         # Convert for display
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                         frame_window.image(frame_rgb, channels="RGB")
-                        time.sleep(1)
+                        time.sleep(1)  # reduce CPU usage
 
-                    process.wait()  # Wait for FFmpeg process to end
+                    process.wait()
+
+            except ffmpeg.Error as e:
+                # Show the full stderr message for debugging
+                error_output = e.stderr.decode('utf-8', errors='replace')
+                st.error(f"FFmpeg streaming error: {error_output}")
 
             except Exception as e:
-                st.error(f"FFmpeg streaming error: {e}")
-            # ----------------------------------------------------
+                # Catch other, non-ffmpeg exceptions
+                st.error(f"Unexpected error: {e}")
+            # --------------------------------------------------------------------------
         else:
             st.error("Could not retrieve the video stream. Try a different YouTube video.")
     else:
